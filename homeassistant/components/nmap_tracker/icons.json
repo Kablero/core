@@ -1,11 +1,21 @@
 {
   "entity": {
+    "button": {
+      "scan": {
+        "default": "mdi:radar"
+      }
+    },
     "device_tracker": {
       "device_tracker": {
         "default": "mdi:lan-disconnect",
         "state": {
           "home": "mdi:lan-connect"
         }
+      }
+    },
+    "sensor": {
+      "last_scan": {
+        "default": "mdi:clock-check-outline"
       }
     }
   }

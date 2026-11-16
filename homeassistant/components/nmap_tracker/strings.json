@@ -19,6 +19,18 @@
       }
     }
   },
+  "entity": {
+    "button": {
+      "scan": {
+        "name": "Scan now"
+      }
+    },
+    "sensor": {
+      "last_scan": {
+        "name": "Last scanned"
+      }
+    }
+  },
   "options": {
     "error": {
       "invalid_hosts": "[%key:component::nmap_tracker::config::error::invalid_hosts%]"
