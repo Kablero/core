@@ -2,6 +2,8 @@
 
 from unittest.mock import patch
 
+from freezegun.api import FrozenDateTimeFactory
+
 from homeassistant.components.nmap_tracker.const import (
     CONF_HOME_INTERVAL,
     CONF_HOSTS_EXCLUDE,
@@ -133,3 +135,47 @@ async def test_scan_creates_entity(
 
     entity_id = entity_registry.async_get_entity_id("device_tracker", DOMAIN, mac)
     assert entity_id is not None
+
+
+async def test_scan_button_updates_last_scanned(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Test that pressing Scan now updates the Last scanned sensor."""
+    mock_entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        minor_version=2,
+        options={
+            CONF_HOSTS_LIST: ["192.168.1.0/24"],
+            CONF_HOSTS_EXCLUDE: [],
+            CONF_MAC_EXCLUDE: [],
+            CONF_HOME_INTERVAL: 0,
+            CONF_OPTIONS: DEFAULT_OPTIONS,
+        },
+    )
+    mock_entry.add_to_hass(hass)
+    hass.set_state(CoreState.not_running)  # no automatic scan
+    freezer.move_to("2026-11-16 12:00:00+00:00")
+
+    # Mock only the nmap binary; button, scanner, dispatcher and sensor run for real
+    with patch("homeassistant.components.nmap_tracker.PortScanner") as mock_cls:
+        mock_cls.return_value.scan.return_value = {"scan": {}}
+        assert await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+
+        sensor_id = entity_registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{mock_entry.entry_id}_last_scan"
+        )
+        button_id = entity_registry.async_get_entity_id(
+            "button", DOMAIN, f"{mock_entry.entry_id}_scan"
+        )
+        assert hass.states.get(sensor_id).state == "unknown"
+
+        await hass.services.async_call(
+            "button", "press", {"entity_id": button_id}, blocking=True
+        )
+        await hass.async_block_till_done()
+
+    assert hass.states.get(sensor_id).state == "2026-11-16T12:00:00+00:00"
