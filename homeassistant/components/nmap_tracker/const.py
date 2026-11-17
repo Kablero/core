@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 DOMAIN: Final = "nmap_tracker"
 
-PLATFORMS: Final = [Platform.DEVICE_TRACKER]
+PLATFORMS: Final = [Platform.BUTTON, Platform.DEVICE_TRACKER, Platform.SENSOR]
 
 # Tracked devices are keyed by MAC across every config entry, so the registry
 # is shared rather than owned by any one entry.

@@ -20,7 +20,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EXCLUDE, CONF_HOSTS, EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, entity_registry as er
-from homeassistant.helpers.device_registry import format_mac
+from homeassistant.helpers.device_registry import DeviceInfo, format_mac
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
@@ -168,26 +168,27 @@ class NmapDeviceScanner:
     ) -> None:
         """Initialize the scanner."""
         self.devices = devices
-        self.home_interval = None
-        self.consider_home = DEFAULT_CONSIDER_HOME
+        self.home_interval: timedelta | None = None
+        self.consider_home: timedelta = DEFAULT_CONSIDER_HOME
 
         self._hass = hass
         self._entry = entry
 
-        self._scan_lock = None
+        self._scan_lock = asyncio.Lock()
         self._stopping = False
-        self._scanner = None
+        self._scanner: PortScanner | None = None
 
         self._entry_id = entry.entry_id
-        self._hosts = None
-        self._options = None
-        self._exclude = None
-        self._mac_exclude = None
-        self._scan_interval = None
+        self._hosts: list[str] = []
+        self._options = ""
+        self._exclude: list[str] = []
+        self._mac_exclude: list[str] = []
+        self._scan_interval = timedelta(seconds=TRACKER_SCAN_INTERVAL)
 
         self._known_mac_addresses: dict[str, str] = {}
         self._finished_first_scan = False
         self._last_results: list[NmapDevice] = []
+        self.last_scan: datetime | None = None
 
     async def async_setup(self):
         """Set up the tracker."""
@@ -206,7 +207,6 @@ class NmapDeviceScanner:
             self.consider_home = timedelta(
                 seconds=cv.positive_float(config[CONF_CONSIDER_HOME])
             )
-        self._scan_lock = asyncio.Lock()
         if self._hass.state is CoreState.running:
             await self._async_start_scanner()
             return
@@ -233,6 +233,19 @@ class NmapDeviceScanner:
     def signal_device_missing(self) -> str:
         """Signal specific per nmap tracker entry to signal a missing device."""
         return f"{DOMAIN}-device-missing-{self._entry_id}"
+
+    @property
+    def signal_scan(self) -> str:
+        """Signal that a scan for this config entry finished."""
+        return f"{DOMAIN}-scan-{self._entry_id}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device that represents this scanner."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry_id)},
+            name=self._entry.title,
+        )
 
     @callback
     def _async_stop(self):
@@ -277,6 +290,21 @@ class NmapDeviceScanner:
             device for device in self._last_results if device.last_update > boundary
         ]
 
+    async def async_scan(self) -> None:
+        """Run one scan, waiting if another scan is already in progress."""
+        async with self._scan_lock:
+            try:
+                await self._async_run_nmap_scan()
+            except PortScannerError as ex:
+                _LOGGER.error("Nmap scanning failed: %s", ex)
+                return
+
+        if self._stopping:
+            return
+
+        self.last_scan = dt_util.now()
+        async_dispatcher_send(self._hass, self.signal_scan)
+
     async def _async_scan_devices(self, *_):
         """Scan devices and dispatch."""
         if self._scan_lock.locked():
@@ -286,11 +314,7 @@ class NmapDeviceScanner:
             )
             return
 
-        async with self._scan_lock:
-            try:
-                await self._async_run_nmap_scan()
-            except PortScannerError as ex:
-                _LOGGER.error("Nmap scanning failed: %s", ex)
+        await self.async_scan()
 
         if not self._finished_first_scan:
             self._finished_first_scan = True
@@ -432,7 +456,7 @@ class NmapDeviceScanner:
             return
 
         hostname = info["hostnames"][0]["name"] if info["hostnames"] else ipv4
-        vendor = info.get("vendor", {}).get(mac) or aiooui.get_vendor(mac)
+        vendor = info.get("vendor", {}).get(mac) or aiooui.get_vendor(mac) or ""
         device = NmapDevice(
             formatted_mac,
             hostname,
